@@ -4,6 +4,7 @@ import logging
 import os
 import sys
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from services.notifier import EmailNotifier, SmtpConfig
@@ -12,6 +13,7 @@ from services.storage import State, isoformat_now, load_state, save_state
 
 
 DEFAULT_TARGET_NAME = "Kanaia Pramesthi Nareswari"
+DEFAULT_DOTENV_PATH = Path(".env")
 
 
 def _setup_logging() -> None:
@@ -26,8 +28,31 @@ def _get_env(name: str) -> str:
     return value
 
 
+def _load_dotenv(path: Path = DEFAULT_DOTENV_PATH) -> None:
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return
+
+    for line in raw.splitlines():
+        s = line.strip()
+        if not s or s.startswith("#"):
+            continue
+        if "=" not in s:
+            continue
+        key, value = s.split("=", 1)
+        key = key.strip()
+        if not key:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+            value = value[1:-1]
+        os.environ.setdefault(key, value)
+
+
 def main() -> int:
     _setup_logging()
+    _load_dotenv()
     wib = ZoneInfo("Asia/Jakarta")
 
     target_name = _get_env("TARGET_NAME") or DEFAULT_TARGET_NAME
