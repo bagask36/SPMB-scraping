@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Iterable, Optional
@@ -86,20 +87,62 @@ def fetch_participant_by_nisn(
         }
     )
 
-    try:
-        resp = session.get(url, params={"nisn": nisn}, timeout=timeout_seconds)
-        resp.raise_for_status()
-        html = resp.text
-    except requests.RequestException:
-        return FetchResult(
-            status=FetchStatus.ERROR, participant=None, error="Website tidak dapat diakses"
-        )
+    last_error: Optional[str] = None
+    for attempt in range(1, 4):
+        try:
+            resp = session.get(
+                url,
+                params={"nisn": nisn},
+                timeout=(10, timeout_seconds),
+                allow_redirects=True,
+            )
+            status = resp.status_code
+            html = resp.text or ""
 
-    participant = _parse_ranking_by_nisn_html(html)
-    if participant is None:
-        return FetchResult(status=FetchStatus.NOT_FOUND, participant=None)
+            if status != 200:
+                last_error = f"HTTP {status}"
+                logger.warning("Gagal ambil ranking (NISN) | status=%s | attempt=%s", status, attempt)
+                time.sleep(min(2 * attempt, 5))
+                continue
 
-    return FetchResult(status=FetchStatus.FOUND, participant=participant)
+            lowered = html.lower()
+            if any(
+                token in lowered
+                for token in (
+                    "just a moment",
+                    "attention required",
+                    "cf-chl",
+                    "cloudflare",
+                    "im_under_attack_box",
+                    "ray id",
+                )
+            ):
+                last_error = "Terblokir oleh proteksi (Cloudflare)"
+                logger.warning("Terblokir proteksi saat ambil ranking (NISN) | attempt=%s", attempt)
+                time.sleep(min(2 * attempt, 5))
+                continue
+
+            participant = _parse_ranking_by_nisn_html(html)
+            if participant is None:
+                return FetchResult(status=FetchStatus.NOT_FOUND, participant=None)
+
+            return FetchResult(status=FetchStatus.FOUND, participant=participant)
+        except (requests.Timeout, requests.ConnectionError) as e:
+            last_error = f"{type(e).__name__}"
+            logger.warning("Timeout/koneksi saat ambil ranking (NISN) | error=%s | attempt=%s", type(e).__name__, attempt)
+            time.sleep(min(2 * attempt, 5))
+            continue
+        except requests.RequestException as e:
+            last_error = f"{type(e).__name__}"
+            logger.warning("Request error saat ambil ranking (NISN) | error=%s | attempt=%s", type(e).__name__, attempt)
+            time.sleep(min(2 * attempt, 5))
+            continue
+
+    return FetchResult(
+        status=FetchStatus.ERROR,
+        participant=None,
+        error=f"Website tidak dapat diakses ({last_error or 'unknown'})",
+    )
 
 
 def _try_parse_int(value: Any) -> Optional[int]:
