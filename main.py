@@ -11,6 +11,9 @@ from services.scraper import FetchStatus, fetch_participant
 from services.storage import State, isoformat_now, load_state, save_state
 
 
+DEFAULT_TARGET_NAME = "Kanaia Pramesthi Nareswari"
+
+
 def _setup_logging() -> None:
     logging.basicConfig(
         level=logging.INFO,
@@ -18,10 +21,8 @@ def _setup_logging() -> None:
     )
 
 
-def _get_required_env(name: str) -> str:
+def _get_env(name: str) -> str:
     value = (os.environ.get(name) or "").strip()
-    if not value:
-        raise ValueError(f"{name} belum di-set")
     return value
 
 
@@ -29,11 +30,7 @@ def main() -> int:
     _setup_logging()
     wib = ZoneInfo("Asia/Jakarta")
 
-    try:
-        target_name = _get_required_env("TARGET_NAME")
-    except ValueError as e:
-        logging.error(str(e))
-        return 2
+    target_name = _get_env("TARGET_NAME") or DEFAULT_TARGET_NAME
 
     checked_at = datetime.now(tz=wib)
     checked_at_iso = isoformat_now(checked_at)
