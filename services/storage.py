@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Optional
+from zoneinfo import ZoneInfo
 
 
 @dataclass(frozen=True)
@@ -84,4 +85,9 @@ def save_state(state: State, path: Path = DEFAULT_STATE_PATH) -> None:
 
 
 def isoformat_now(dt: datetime) -> str:
+    wib = ZoneInfo("Asia/Jakarta")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=wib)
+    else:
+        dt = dt.astimezone(wib)
     return dt.isoformat(timespec="seconds")
