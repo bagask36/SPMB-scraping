@@ -57,6 +57,7 @@ def main() -> int:
 
     target_name = _get_env("TARGET_NAME") or DEFAULT_TARGET_NAME
     target_nisn = _get_env("TARGET_NISN")
+    send_every_check = _get_env("SEND_EVERY_CHECK").lower() in {"1", "true", "yes", "y", "on"}
 
     checked_at = datetime.now(tz=wib)
     checked_at_iso = isoformat_now(checked_at)
@@ -121,16 +122,44 @@ def main() -> int:
     )
 
     if previous.rank is None:
-        logging.info("State awal belum ada. Simpan state tanpa kirim email.")
+        if send_every_check:
+            logging.info("Mode email: KIRIM SETIAP CEK | alasan=state_awal")
+            try:
+                notifier = EmailNotifier(SmtpConfig.from_env())
+                notifier.send_rank_update(
+                    name=participant.name,
+                    rank=int(participant.rank),
+                    score=participant.score,
+                    checked_at_wib=checked_at,
+                )
+                logging.info("Email update terkirim | to=%s", os.environ.get("NOTIFICATION_EMAIL"))
+            except Exception as e:
+                logging.error("Gagal kirim email update | error=%s", e)
+
+        logging.info("State awal belum ada. Simpan state.")
         save_state(current_state)
         return 0
 
     if participant.rank == previous.rank:
-        logging.info(
-            "Ranking tidak berubah | prev=%s | now=%s | email=SKIP",
-            previous.rank,
-            participant.rank,
-        )
+        if send_every_check:
+            logging.info("Mode email: KIRIM SETIAP CEK | prev=%s | now=%s", previous.rank, participant.rank)
+            try:
+                notifier = EmailNotifier(SmtpConfig.from_env())
+                notifier.send_rank_update(
+                    name=participant.name,
+                    rank=int(participant.rank),
+                    score=participant.score,
+                    checked_at_wib=checked_at,
+                )
+                logging.info("Email update terkirim | to=%s", os.environ.get("NOTIFICATION_EMAIL"))
+            except Exception as e:
+                logging.error("Gagal kirim email update | error=%s", e)
+        else:
+            logging.info(
+                "Ranking tidak berubah | prev=%s | now=%s | email=SKIP",
+                previous.rank,
+                participant.rank,
+            )
         save_state(current_state)
         return 0
 

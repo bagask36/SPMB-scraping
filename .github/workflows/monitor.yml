@@ -38,6 +38,7 @@ jobs:
         env:
           TARGET_NAME: ${{ secrets.TARGET_NAME }}
           TARGET_NISN: ${{ secrets.TARGET_NISN }}
+          SEND_EVERY_CHECK: ${{ secrets.SEND_EVERY_CHECK }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}
           SMTP_USERNAME: ${{ secrets.SMTP_USERNAME }}
