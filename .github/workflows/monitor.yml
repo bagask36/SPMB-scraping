@@ -51,11 +51,15 @@ jobs:
 
       - name: Commit updated state (if changed)
         run: |
-          BRANCH="${GITHUB_REF_NAME:-main}"
-          git switch -C "$BRANCH"
           if [[ -n "$(git status --porcelain data/state.json)" ]]; then
+            BRANCH="${GITHUB_REF_NAME:-main}"
             git config user.name "github-actions[bot]"
             git config user.email "github-actions[bot]@users.noreply.github.com"
+            cp data/state.json /tmp/state.json
+            git fetch origin "$BRANCH"
+            git switch -C "$BRANCH"
+            git reset --hard "origin/$BRANCH"
+            cp /tmp/state.json data/state.json
             git add data/state.json
             git commit -m "Update monitoring state"
             git push origin "HEAD:$BRANCH"
