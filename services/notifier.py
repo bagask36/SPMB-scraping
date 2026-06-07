@@ -85,6 +85,92 @@ class EmailNotifier:
         self._config = config
         self._timeout_seconds = timeout_seconds
 
+    def send_rank_update(
+        self,
+        *,
+        name: str,
+        rank: int,
+        score: Optional[float],
+        checked_at_wib: datetime,
+    ) -> None:
+        score_text = f"{score:.2f}" if score is not None else "-"
+
+        msg = EmailMessage()
+        msg["Subject"] = "Update Ranking SPMB"
+        msg["From"] = self._config.mail_from
+        msg["To"] = ", ".join(self._config.notification_emails)
+
+        text_body = "\n".join(
+            [
+                f"Nama Peserta: {name}",
+                "",
+                f"Ranking Saat Ini: {rank}",
+                f"Skor: {score_text}",
+                "",
+                f"Waktu: {format_wib(checked_at_wib)}",
+            ]
+        )
+        msg.set_content(text_body)
+
+        html_body = f"""\
+<!doctype html>
+<html lang="id">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+  </head>
+  <body style="margin:0; padding:0; background:#f6f7fb; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; color:#111827;">
+    <div style="max-width:640px; margin:0 auto; padding:24px;">
+      <div style="padding:18px 20px; background:#111827; border-radius:16px 16px 0 0;">
+        <div style="font-size:13px; letter-spacing:0.08em; text-transform:uppercase; color:#9CA3AF;">SPMB Jawa Barat</div>
+        <div style="margin-top:6px; font-size:20px; font-weight:700; color:#FFFFFF;">Update Ranking SPMB</div>
+      </div>
+
+      <div style="background:#ffffff; border-radius:0 0 16px 16px; border:1px solid #e5e7eb; border-top:none; padding:20px;">
+        <div style="margin-top:2px; color:#6B7280; font-size:12px; letter-spacing:0.08em; text-transform:uppercase;">Nama Peserta</div>
+        <div style="margin-top:6px; font-size:18px; font-weight:700; color:#111827;">{escape(name)}</div>
+
+        <div style="margin-top:18px; display:flex; gap:12px; flex-wrap:wrap;">
+          <div style="flex:1 1 240px; padding:14px; border:1px solid #e5e7eb; border-radius:14px; background:#FAFAFB;">
+            <div style="color:#6B7280; font-size:12px; letter-spacing:0.08em; text-transform:uppercase;">Ranking Saat Ini</div>
+            <div style="margin-top:6px; font-size:26px; font-weight:900; color:#111827;">#{rank}</div>
+          </div>
+          <div style="flex:1 1 240px; padding:14px; border:1px solid #e5e7eb; border-radius:14px; background:#FAFAFB;">
+            <div style="color:#6B7280; font-size:12px; letter-spacing:0.08em; text-transform:uppercase;">Skor</div>
+            <div style="margin-top:10px; font-size:18px; font-weight:800; color:#111827;">{escape(score_text)}</div>
+          </div>
+        </div>
+
+        <div style="margin-top:18px; padding:14px; border-radius:14px; background:#F9FAFB; border:1px dashed #E5E7EB;">
+          <div style="color:#6B7280; font-size:12px; letter-spacing:0.08em; text-transform:uppercase;">Waktu Pengecekan</div>
+          <div style="margin-top:6px; font-size:14px; font-weight:700; color:#111827;">{escape(format_wib(checked_at_wib))}</div>
+        </div>
+
+        <div style="margin-top:18px; color:#6B7280; font-size:12px; line-height:1.5;">
+          Email ini dikirim otomatis setiap 15 menit (mode update berkala).
+        </div>
+      </div>
+    </div>
+  </body>
+</html>
+"""
+        msg.add_alternative(html_body, subtype="html")
+
+        with smtplib.SMTP(
+            self._config.host, self._config.port, timeout=self._timeout_seconds
+        ) as smtp:
+            smtp.ehlo()
+            try:
+                if smtp.has_extn("starttls"):
+                    smtp.starttls()
+                    smtp.ehlo()
+            except smtplib.SMTPException:
+                pass
+
+            if self._config.username and self._config.password:
+                smtp.login(self._config.username, self._config.password)
+            smtp.send_message(msg)
+
     def send_rank_change(
         self,
         *,
