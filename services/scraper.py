@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import time
 from dataclasses import dataclass
@@ -68,6 +69,11 @@ def _parse_ranking_by_nisn_html(html: str) -> Optional[Participant]:
     return Participant(name=name, rank=rank, score=score)
 
 
+def _get_spmb_cookie_header() -> Optional[str]:
+    raw = (os.getenv("SPMB_COOKIE") or "").strip()
+    return raw or None
+
+
 def fetch_participant_by_nisn(
     target_nisn: str,
     *,
@@ -78,23 +84,47 @@ def fetch_participant_by_nisn(
     if not nisn:
         return FetchResult(status=FetchStatus.NOT_FOUND, participant=None)
 
+    base_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
     session = requests.Session()
+    cookie_header = _get_spmb_cookie_header()
     session.headers.update(
         {
             "User-Agent": DEFAULT_USER_AGENT,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+            **({"Cookie": cookie_header} if cookie_header else {}),
         }
     )
+
+    def warmup() -> None:
+        try:
+            session.get(
+                base_url + "/",
+                timeout=(10, timeout_seconds),
+                headers={
+                    "Referer": base_url + "/",
+                    "Cache-Control": "no-cache",
+                    "Pragma": "no-cache",
+                },
+            )
+        except requests.RequestException:
+            return
 
     last_error: Optional[str] = None
     for attempt in range(1, 4):
         try:
+            warmup()
             resp = session.get(
                 url,
                 params={"nisn": nisn},
                 timeout=(10, timeout_seconds),
                 allow_redirects=True,
+                headers={
+                    "Referer": base_url + "/",
+                    "Origin": base_url,
+                    "Cache-Control": "no-cache",
+                    "Pragma": "no-cache",
+                },
             )
             status = resp.status_code
             html = resp.text or ""
@@ -141,7 +171,12 @@ def fetch_participant_by_nisn(
     return FetchResult(
         status=FetchStatus.ERROR,
         participant=None,
-        error=f"Website tidak dapat diakses ({last_error or 'unknown'})",
+        error=(
+            "Website tidak dapat diakses (HTTP 403). "
+            "Jika halaman bisa dibuka di browser tapi gagal via script, set env SPMB_COOKIE dari browser."
+            if last_error == "HTTP 403"
+            else f"Website tidak dapat diakses ({last_error or 'unknown'})"
+        ),
     )
 
 
