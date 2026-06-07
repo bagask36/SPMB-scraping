@@ -7,7 +7,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from services.notifier import EmailNotifier, SmtpConfig
-from services.scraper import FetchStatus, fetch_participant
+from services.scraper import FetchStatus, fetch_participant, fetch_participant_by_nisn
 from services.storage import State, isoformat_now, load_state, save_state
 
 
@@ -31,6 +31,7 @@ def main() -> int:
     wib = ZoneInfo("Asia/Jakarta")
 
     target_name = _get_env("TARGET_NAME") or DEFAULT_TARGET_NAME
+    target_nisn = _get_env("TARGET_NISN")
 
     checked_at = datetime.now(tz=wib)
     checked_at_iso = isoformat_now(checked_at)
@@ -43,7 +44,12 @@ def main() -> int:
         previous.score,
     )
 
-    result = fetch_participant(target_name)
+    if target_nisn:
+        logging.info("Mode cek: NISN | nisn=%s", target_nisn)
+        result = fetch_participant_by_nisn(target_nisn)
+    else:
+        logging.info("Mode cek: Nama (fallback) | catatan=halaman sekolah bersifat dinamis")
+        result = fetch_participant(target_name)
     if result.status == FetchStatus.ERROR:
         logging.error(
             "Gagal cek website | waktu=%s | error=%s",

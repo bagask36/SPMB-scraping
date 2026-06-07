@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import re
 from dataclasses import dataclass
 from enum import Enum
@@ -12,11 +13,13 @@ from bs4 import BeautifulSoup
 
 
 SCHOOL_URL = "https://spmb.jabarprov.go.id/sekolah/025d2e40-bed3-4c44-a1ec-af4dcec70890"
+RANKING_BY_NISN_URL = "https://spmb.jabarprov.go.id/ranking-sementara"
 DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
     "AppleWebKit/537.36 (KHTML, like Gecko) "
     "Chrome/125.0.0.0 Safari/537.36"
 )
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -41,6 +44,62 @@ class FetchResult:
 
 def _normalize_name(name: str) -> str:
     return " ".join(name.strip().lower().split())
+
+
+def _parse_ranking_by_nisn_html(html: str) -> Optional[Participant]:
+    name_match = re.search(r">Nama</p><p[^>]*>([^<]+)</p>", html)
+    rank_match = re.search(r">Posisi Anda</p>.*?>#(\d{1,5})<", html, flags=re.DOTALL)
+    score_match = re.search(r">Skor Akhir</p><p[^>]*>([0-9.,]+)</p>", html)
+
+    if not name_match or not rank_match:
+        return None
+
+    name = name_match.group(1).strip()
+    try:
+        rank = int(rank_match.group(1))
+    except ValueError:
+        return None
+
+    score = None
+    if score_match:
+        score = _try_parse_float(score_match.group(1))
+
+    return Participant(name=name, rank=rank, score=score)
+
+
+def fetch_participant_by_nisn(
+    target_nisn: str,
+    *,
+    timeout_seconds: int = 20,
+    url: str = RANKING_BY_NISN_URL,
+) -> FetchResult:
+    nisn = (target_nisn or "").strip()
+    if not nisn:
+        return FetchResult(status=FetchStatus.NOT_FOUND, participant=None)
+
+    session = requests.Session()
+    session.headers.update(
+        {
+            "User-Agent": DEFAULT_USER_AGENT,
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
+        }
+    )
+
+    try:
+        resp = session.get(url, params={"nisn": nisn}, timeout=timeout_seconds)
+        resp.raise_for_status()
+        html = resp.text
+    except requests.RequestException:
+        return FetchResult(
+            status=FetchStatus.ERROR, participant=None, error="Website tidak dapat diakses"
+        )
+
+    participant = _parse_ranking_by_nisn_html(html)
+    if participant is None:
+        return FetchResult(status=FetchStatus.NOT_FOUND, participant=None)
+
+    return FetchResult(status=FetchStatus.FOUND, participant=participant)
 
 
 def _try_parse_int(value: Any) -> Optional[int]:
@@ -322,14 +381,6 @@ def fetch_participant(
     if rsc_found is not None:
         return FetchResult(status=FetchStatus.FOUND, participant=rsc_found)
 
-    selenium_found = _selenium_fallback_find_participant(
-        target_name=target_name,
-        timeout_seconds=timeout_seconds,
-        url=url,
-    )
-    if selenium_found is not None:
-        return FetchResult(status=FetchStatus.FOUND, participant=selenium_found)
-
     return FetchResult(status=FetchStatus.NOT_FOUND, participant=None)
 
 
@@ -380,102 +431,3 @@ def _rsc_fallback_find_participant(
         return None
     except requests.RequestException:
         return None
-
-
-def _selenium_fallback_find_participant(
-    *,
-    target_name: str,
-    url: str,
-    timeout_seconds: int,
-) -> Optional[Participant]:
-    try:
-        from selenium import webdriver
-        from selenium.common.exceptions import TimeoutException, WebDriverException
-        from selenium.webdriver.chrome.options import Options
-        from selenium.webdriver.common.by import By
-        from selenium.webdriver.support import expected_conditions as EC
-        from selenium.webdriver.support.ui import WebDriverWait
-    except Exception:
-        return None
-
-    target_norm = _normalize_name(target_name)
-    if not target_norm:
-        return None
-
-    def parse_row_text(row_text: str) -> Optional[Participant]:
-        text = " ".join(row_text.split())
-        m_rank = re.search(r"\b\d{1,4}\b", text)
-        rank = int(m_rank.group(0)) if m_rank else None
-
-        scores: list[float] = []
-        for m in re.finditer(r"\b\d{1,4}[.,]\d{1,3}\b", text):
-            raw = m.group(0).replace(",", ".")
-            try:
-                scores.append(float(raw))
-            except ValueError:
-                continue
-        score = scores[-1] if scores else None
-
-        if rank is None:
-            return None
-        return Participant(name=target_name, rank=rank, score=score)
-
-    options = Options()
-    options.add_argument("--headless=new")
-    options.add_argument("--no-sandbox")
-    options.add_argument("--disable-dev-shm-usage")
-    options.add_argument(f"--user-agent={DEFAULT_USER_AGENT}")
-    options.add_argument("--lang=id-ID")
-
-    driver = None
-    try:
-        driver = webdriver.Chrome(options=options)
-        driver.set_page_load_timeout(timeout_seconds)
-        driver.implicitly_wait(1)
-        driver.get(url)
-
-        wait = WebDriverWait(driver, timeout_seconds)
-        try:
-            wait.until(EC.presence_of_element_located((By.TAG_NAME, "body")))
-        except TimeoutException:
-            return None
-
-        for _ in range(50):
-            try:
-                el = driver.find_element(
-                    By.XPATH,
-                    f"//*[contains(translate(normalize-space(.), 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz'), '{target_norm}')]",
-                )
-                row_el = None
-                try:
-                    row_el = el.find_element(By.XPATH, "ancestor::tr[1]")
-                except WebDriverException:
-                    pass
-                if row_el is None:
-                    try:
-                        row_el = el.find_element(By.XPATH, "ancestor::div[1]")
-                    except WebDriverException:
-                        row_el = None
-
-                row_text = (row_el.text if row_el is not None else el.text) or ""
-                found = parse_row_text(row_text)
-                if found is not None:
-                    return found
-            except WebDriverException:
-                pass
-
-            driver.execute_script("window.scrollBy(0, 2000);")
-            try:
-                wait.until(lambda d: True)
-            except Exception:
-                pass
-
-        return None
-    except Exception:
-        return None
-    finally:
-        try:
-            if driver is not None:
-                driver.quit()
-        except Exception:
-            pass
