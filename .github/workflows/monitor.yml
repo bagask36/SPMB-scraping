@@ -30,6 +30,11 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Install Chromium
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y chromium-browser || sudo apt-get install -y chromium
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
@@ -39,7 +44,6 @@ jobs:
         env:
           TARGET_NAME: ${{ secrets.TARGET_NAME }}
           TARGET_NISN: ${{ secrets.TARGET_NISN }}
-          SPMB_COOKIE: ${{ secrets.SPMB_COOKIE }}
           SEND_EVERY_CHECK: ${{ secrets.SEND_EVERY_CHECK }}
           SMTP_HOST: ${{ secrets.SMTP_HOST }}
           SMTP_PORT: ${{ secrets.SMTP_PORT }}

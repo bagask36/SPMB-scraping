@@ -4,7 +4,9 @@ import json
 import logging
 import os
 import re
+import shutil
 import time
+import sys
 from dataclasses import dataclass
 from enum import Enum
 from typing import Any, Iterable, Optional
@@ -12,6 +14,10 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
+from selenium import webdriver
+from selenium.common.exceptions import WebDriverException
+from selenium.webdriver.common.by import By
+from selenium.webdriver.chrome.options import Options as ChromeOptions
 
 
 SCHOOL_URL = "https://spmb.jabarprov.go.id/sekolah/025d2e40-bed3-4c44-a1ec-af4dcec70890"
@@ -69,9 +75,96 @@ def _parse_ranking_by_nisn_html(html: str) -> Optional[Participant]:
     return Participant(name=name, rank=rank, score=score)
 
 
-def _get_spmb_cookie_header() -> Optional[str]:
-    raw = (os.getenv("SPMB_COOKIE") or "").strip()
-    return raw or None
+def _text_or_empty(value: Optional[str]) -> str:
+    return (value or "").strip()
+
+
+def _extract_value_by_label(driver: webdriver.Chrome, label: str) -> str:
+    nodes = driver.find_elements(By.XPATH, f"//*[normalize-space()='{label}']")
+    if not nodes:
+        return ""
+    node = nodes[0]
+    try:
+        sibling = node.find_element(By.XPATH, "following::*[1]")
+        return _text_or_empty(sibling.text)
+    except Exception:
+        return ""
+
+
+def _fetch_participant_by_nisn_with_browser(nisn: str, *, timeout_seconds: int = 60) -> Optional[Participant]:
+    target_url = f"{RANKING_BY_NISN_URL}?nisn={nisn}"
+    options = ChromeOptions()
+    headless_env = (os.environ.get("SPMB_HEADLESS") or "").strip().lower()
+    if headless_env in {"0", "false", "no", "n", "off"}:
+        headless = False
+    elif headless_env in {"1", "true", "yes", "y", "on"}:
+        headless = True
+    else:
+        if (os.environ.get("GITHUB_ACTIONS") or "").strip().lower() == "true":
+            headless = True
+        else:
+            headless = sys.platform != "darwin"
+    if headless:
+        options.add_argument("--headless=new")
+    options.add_argument("--disable-gpu")
+    options.add_argument("--no-sandbox")
+    options.add_argument("--disable-dev-shm-usage")
+    options.add_argument("--window-size=1280,800")
+    options.add_argument("--lang=id-ID")
+
+    chrome_bin = (
+        shutil.which("google-chrome")
+        or shutil.which("google-chrome-stable")
+        or shutil.which("chromium")
+        or shutil.which("chromium-browser")
+    )
+    if chrome_bin:
+        options.binary_location = chrome_bin
+
+    try:
+        driver = webdriver.Chrome(options=options)
+    except WebDriverException as e:
+        raise RuntimeError(f"Gagal memulai browser (Chrome). Pastikan Chrome/Chromium tersedia. ({e})") from e
+
+    try:
+        driver.set_page_load_timeout(min(timeout_seconds, 60))
+        driver.get(target_url)
+
+        start = time.time()
+        while time.time() - start < timeout_seconds:
+            name = _extract_value_by_label(driver, "Nama")
+            score_raw = _extract_value_by_label(driver, "Skor Akhir")
+            rank_raw = _extract_value_by_label(driver, "Posisi Anda")
+
+            rank_match = re.search(r"#\s*(\d{1,5})", rank_raw)
+            if name and rank_match:
+                score = _try_parse_float(score_raw) if score_raw else None
+                return Participant(name=name, rank=int(rank_match.group(1)), score=score)
+
+            html = driver.page_source or ""
+            lowered = html.lower()
+            if any(
+                token in lowered
+                for token in (
+                    "just a moment",
+                    "attention required",
+                    "cf-chl",
+                    "cloudflare",
+                    "im_under_attack_box",
+                    "ray id",
+                )
+            ):
+                time.sleep(2)
+                continue
+
+            time.sleep(1)
+
+        return None
+    finally:
+        try:
+            driver.quit()
+        except Exception:
+            pass
 
 
 def fetch_participant_by_nisn(
@@ -86,13 +179,11 @@ def fetch_participant_by_nisn(
 
     base_url = f"{urlparse(url).scheme}://{urlparse(url).netloc}"
     session = requests.Session()
-    cookie_header = _get_spmb_cookie_header()
     session.headers.update(
         {
             "User-Agent": DEFAULT_USER_AGENT,
             "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
             "Accept-Language": "id-ID,id;q=0.9,en-US;q=0.8,en;q=0.7",
-            **({"Cookie": cookie_header} if cookie_header else {}),
         }
     )
 
@@ -168,15 +259,24 @@ def fetch_participant_by_nisn(
             time.sleep(min(2 * attempt, 5))
             continue
 
+    if last_error in {"HTTP 403", "Terblokir oleh proteksi (Cloudflare)"}:
+        logger.warning("Fallback ke browser karena diblokir | alasan=%s", last_error)
+        try:
+            participant = _fetch_participant_by_nisn_with_browser(nisn, timeout_seconds=60)
+            if participant is None:
+                return FetchResult(status=FetchStatus.NOT_FOUND, participant=None)
+            return FetchResult(status=FetchStatus.FOUND, participant=participant)
+        except Exception as e:
+            return FetchResult(
+                status=FetchStatus.ERROR,
+                participant=None,
+                error=f"Website tidak dapat diakses (browser gagal: {e})",
+            )
+
     return FetchResult(
         status=FetchStatus.ERROR,
         participant=None,
-        error=(
-            "Website tidak dapat diakses (HTTP 403). "
-            "Jika halaman bisa dibuka di browser tapi gagal via script, set env SPMB_COOKIE dari browser."
-            if last_error == "HTTP 403"
-            else f"Website tidak dapat diakses ({last_error or 'unknown'})"
-        ),
+        error=f"Website tidak dapat diakses ({last_error or 'unknown'})",
     )
 
 
