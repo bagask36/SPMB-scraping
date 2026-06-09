@@ -14,10 +14,11 @@ class State:
     rank: Optional[int]
     score: Optional[float]
     last_check: Optional[str]
+    last_update_email: Optional[str]
 
     @staticmethod
     def empty() -> "State":
-        return State(name="", rank=None, score=None, last_check=None)
+        return State(name="", rank=None, score=None, last_check=None, last_update_email=None)
 
     @staticmethod
     def from_dict(data: dict[str, Any]) -> "State":
@@ -25,6 +26,7 @@ class State:
         rank_raw = data.get("rank")
         score_raw = data.get("score")
         last_check = data.get("last_check")
+        last_update_email = data.get("last_update_email")
 
         rank = None
         if isinstance(rank_raw, int):
@@ -46,8 +48,16 @@ class State:
 
         if last_check is not None:
             last_check = str(last_check)
+        if last_update_email is not None:
+            last_update_email = str(last_update_email)
 
-        return State(name=name, rank=rank, score=score, last_check=last_check)
+        return State(
+            name=name,
+            rank=rank,
+            score=score,
+            last_check=last_check,
+            last_update_email=last_update_email,
+        )
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -55,6 +65,7 @@ class State:
             "rank": self.rank,
             "score": self.score,
             "last_check": self.last_check,
+            "last_update_email": self.last_update_email,
         }
 
 

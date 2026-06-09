@@ -3,7 +3,7 @@ from __future__ import annotations
 import logging
 import os
 import sys
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
@@ -14,6 +14,7 @@ from services.storage import State, isoformat_now, load_state, save_state
 
 DEFAULT_TARGET_NAME = "Kanaia Pramesthi Nareswari"
 DEFAULT_DOTENV_PATH = Path(".env")
+DEFAULT_UPDATE_EMAIL_INTERVAL_MINUTES = 120
 
 
 def _setup_logging() -> None:
@@ -50,6 +51,38 @@ def _load_dotenv(path: Path = DEFAULT_DOTENV_PATH) -> None:
         os.environ.setdefault(key, value)
 
 
+def _get_env_int(name: str, default: int) -> int:
+    raw = _get_env(name)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        return default
+
+
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value)
+    except ValueError:
+        return None
+
+
+def _should_send_periodic_email(
+    previous: State,
+    checked_at: datetime,
+    interval_minutes: int,
+) -> bool:
+    if interval_minutes <= 0:
+        return True
+    last_sent = _parse_iso_datetime(previous.last_update_email)
+    if last_sent is None:
+        return True
+    return checked_at >= last_sent + timedelta(minutes=interval_minutes)
+
+
 def main() -> int:
     _setup_logging()
     _load_dotenv()
@@ -58,6 +91,10 @@ def main() -> int:
     target_name = _get_env("TARGET_NAME") or DEFAULT_TARGET_NAME
     target_nisn = _get_env("TARGET_NISN")
     send_every_check = _get_env("SEND_EVERY_CHECK").lower() in {"1", "true", "yes", "y", "on"}
+    update_email_interval_minutes = _get_env_int(
+        "UPDATE_EMAIL_INTERVAL_MINUTES",
+        DEFAULT_UPDATE_EMAIL_INTERVAL_MINUTES,
+    )
 
     checked_at = datetime.now(tz=wib)
     checked_at_iso = isoformat_now(checked_at)
@@ -88,6 +125,7 @@ def main() -> int:
                 rank=previous.rank,
                 score=previous.score,
                 last_check=checked_at_iso,
+                last_update_email=previous.last_update_email,
             )
         )
         return 0
@@ -100,6 +138,7 @@ def main() -> int:
                 rank=previous.rank,
                 score=previous.score,
                 last_check=checked_at_iso,
+                last_update_email=previous.last_update_email,
             )
         )
         return 0
@@ -119,11 +158,12 @@ def main() -> int:
         rank=participant.rank,
         score=participant.score,
         last_check=checked_at_iso,
+        last_update_email=previous.last_update_email,
     )
 
     if previous.rank is None:
-        if send_every_check:
-            logging.info("Mode email: KIRIM SETIAP CEK | alasan=state_awal")
+        if send_every_check and _should_send_periodic_email(previous, checked_at, update_email_interval_minutes):
+            logging.info("Mode email: KIRIM BERKALA | alasan=state_awal | interval_menit=%s", update_email_interval_minutes)
             try:
                 notifier = EmailNotifier(SmtpConfig.from_env())
                 notifier.send_rank_update(
@@ -133,6 +173,13 @@ def main() -> int:
                     checked_at_wib=checked_at,
                 )
                 logging.info("Email update terkirim | to=%s", os.environ.get("NOTIFICATION_EMAIL"))
+                current_state = State(
+                    name=current_state.name,
+                    rank=current_state.rank,
+                    score=current_state.score,
+                    last_check=current_state.last_check,
+                    last_update_email=checked_at_iso,
+                )
             except Exception as e:
                 logging.error("Gagal kirim email update | error=%s", e)
 
@@ -141,8 +188,13 @@ def main() -> int:
         return 0
 
     if participant.rank == previous.rank:
-        if send_every_check:
-            logging.info("Mode email: KIRIM SETIAP CEK | prev=%s | now=%s", previous.rank, participant.rank)
+        if send_every_check and _should_send_periodic_email(previous, checked_at, update_email_interval_minutes):
+            logging.info(
+                "Mode email: KIRIM BERKALA | prev=%s | now=%s | interval_menit=%s",
+                previous.rank,
+                participant.rank,
+                update_email_interval_minutes,
+            )
             try:
                 notifier = EmailNotifier(SmtpConfig.from_env())
                 notifier.send_rank_update(
@@ -152,8 +204,21 @@ def main() -> int:
                     checked_at_wib=checked_at,
                 )
                 logging.info("Email update terkirim | to=%s", os.environ.get("NOTIFICATION_EMAIL"))
+                current_state = State(
+                    name=current_state.name,
+                    rank=current_state.rank,
+                    score=current_state.score,
+                    last_check=current_state.last_check,
+                    last_update_email=checked_at_iso,
+                )
             except Exception as e:
                 logging.error("Gagal kirim email update | error=%s", e)
+        elif send_every_check:
+            logging.info(
+                "Email update ditunda | alasan=belum_2_jam | last_sent=%s | interval_menit=%s",
+                previous.last_update_email,
+                update_email_interval_minutes,
+            )
         else:
             logging.info(
                 "Ranking tidak berubah | prev=%s | now=%s | email=SKIP",
@@ -195,6 +260,7 @@ def main() -> int:
                 rank=previous.rank,
                 score=previous.score,
                 last_check=checked_at_iso,
+                last_update_email=previous.last_update_email,
             )
         )
         return 0
