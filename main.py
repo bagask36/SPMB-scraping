@@ -106,6 +106,12 @@ def main() -> int:
         previous.rank,
         previous.score,
     )
+    logging.info(
+        "Konfigurasi email | berkala=%s | interval_menit=%s | last_update_email=%s",
+        send_every_check,
+        update_email_interval_minutes,
+        previous.last_update_email,
+    )
 
     if target_nisn:
         logging.info("Mode cek: NISN | nisn=%s", target_nisn)
@@ -162,28 +168,20 @@ def main() -> int:
     )
 
     if previous.rank is None:
-        if send_every_check and _should_send_periodic_email(previous, checked_at, update_email_interval_minutes):
-            logging.info("Mode email: KIRIM BERKALA | alasan=state_awal | interval_menit=%s", update_email_interval_minutes)
-            try:
-                notifier = EmailNotifier(SmtpConfig.from_env())
-                notifier.send_rank_update(
-                    name=participant.name,
-                    rank=int(participant.rank),
-                    score=participant.score,
-                    checked_at_wib=checked_at,
-                )
-                logging.info("Email update terkirim | to=%s", os.environ.get("NOTIFICATION_EMAIL"))
-                current_state = State(
-                    name=current_state.name,
-                    rank=current_state.rank,
-                    score=current_state.score,
-                    last_check=current_state.last_check,
-                    last_update_email=checked_at_iso,
-                )
-            except Exception as e:
-                logging.error("Gagal kirim email update | error=%s", e)
-
-        logging.info("State awal belum ada. Simpan state.")
+        if send_every_check:
+            current_state = State(
+                name=current_state.name,
+                rank=current_state.rank,
+                score=current_state.score,
+                last_check=current_state.last_check,
+                last_update_email=checked_at_iso,
+            )
+            logging.info(
+                "State awal belum ada. Seed jadwal email berkala | next_after=%s menit",
+                update_email_interval_minutes,
+            )
+        else:
+            logging.info("State awal belum ada. Simpan state.")
         save_state(current_state)
         return 0
 
